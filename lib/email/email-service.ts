@@ -3,6 +3,15 @@ import { env } from "@/lib/config/env";
 
 const resend = env.RESEND_API_KEY ? new Resend(env.RESEND_API_KEY) : null;
 
+// In development, silently logging emails to the console is the intended
+// behaviour. In production it means booking confirmations and waitlist offers
+// are silently going nowhere, which is easy to miss — so say so, loudly.
+if (!resend && env.NODE_ENV === "production") {
+  console.error(
+    "[email] RESEND_API_KEY is not set. Booking confirmation and waitlist offer emails will NOT be delivered.",
+  );
+}
+
 interface BookingConfirmationEmailParams {
   to: string;
   reference: string;
@@ -27,17 +36,25 @@ async function send(payload: { to: string; subject: string; html: string }): Pro
     return;
   }
   try {
-    await resend.emails.send({
+    // The SDK reports provider-side failures (bad key, unverified sender,
+    // restricted recipient) in `error` rather than by throwing, so checking
+    // only for exceptions would silently drop undelivered mail.
+    const { data, error } = await resend.emails.send({
       from: env.EMAIL_FROM,
       to: payload.to,
       subject: payload.subject,
       html: payload.html,
     });
+    if (error) {
+      console.error(`[email] delivery to ${payload.to} rejected by provider:`, error);
+      return;
+    }
+    console.log(`[email] sent id=${data?.id} to=${payload.to}`);
   } catch (error) {
     // The booking/offer this email describes is already committed to the
     // database. A provider outage here must never roll that back — log and
     // move on rather than throwing.
-    console.error("Failed to send email:", error);
+    console.error(`[email] delivery to ${payload.to} failed:`, error);
   }
 }
 
