@@ -2,6 +2,7 @@ import { Prisma, type EventSeatStatus } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { ApiError } from "@/lib/utils/api-error";
 import { DEFAULT_HOLD_TTL_MINUTES, MAX_SEATS_PER_BOOKING } from "@/lib/config/booking";
+import { addMinutes } from "@/lib/utils/time";
 import { generateHoldToken } from "./hold-token";
 
 export interface HoldResult {
@@ -79,7 +80,7 @@ export async function holdSeats(params: {
       }
 
       const holdToken = generateHoldToken();
-      const expiresAt = new Date(now.getTime() + DEFAULT_HOLD_TTL_MINUTES * 60_000);
+      const expiresAt = addMinutes(now, DEFAULT_HOLD_TTL_MINUTES);
       const eventSeatIds = rows.map((row) => row.id);
 
       await tx.eventSeat.updateMany({

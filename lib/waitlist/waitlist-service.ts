@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { ApiError } from "@/lib/utils/api-error";
 import { acquireAdvisoryLock } from "@/lib/db/advisory-lock";
 import { WAITLIST_OFFER_TTL_MINUTES } from "@/lib/config/booking";
+import { addMinutes } from "@/lib/utils/time";
 import { sendWaitlistOffer } from "@/lib/email/email-service";
 import { env } from "@/lib/config/env";
 import {
@@ -81,7 +82,7 @@ export async function offerToNextCandidateOrRelease(
     return null;
   }
 
-  const offerExpiresAt = new Date(Date.now() + WAITLIST_OFFER_TTL_MINUTES * 60_000);
+  const offerExpiresAt = addMinutes(new Date(), WAITLIST_OFFER_TTL_MINUTES);
 
   await tx.waitlistEntry.update({
     where: { id: candidate.id },
