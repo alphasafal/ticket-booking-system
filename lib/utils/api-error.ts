@@ -12,6 +12,7 @@ export type ApiErrorCode =
   | "OFFER_OWNER_MISMATCH"
   | "ALREADY_CANCELLED"
   | "CONFLICT"
+  | "RATE_LIMITED"
   | "INTERNAL_ERROR";
 
 const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
@@ -28,6 +29,7 @@ const STATUS_BY_CODE: Record<ApiErrorCode, number> = {
   OFFER_OWNER_MISMATCH: 403,
   ALREADY_CANCELLED: 409,
   CONFLICT: 409,
+  RATE_LIMITED: 429,
   INTERNAL_ERROR: 500,
 };
 
