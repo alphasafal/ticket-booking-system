@@ -135,10 +135,10 @@ QR codes encode the booking reference and are generated only after a booking com
 npm test
 ```
 
-28 tests across three layers:
+33 tests across three layers:
 
-- **Unit** (`tests/unit`) — booking reference generation, pricing, TTL time math
-- **Integration** (`tests/integration`) — booking confirmation invariants (idempotency, hold ownership, expiry)
+- **Unit** (`tests/unit`) — booking reference generation, pricing, TTL time math, centralized error mapping
+- **Integration** (`tests/integration`) — booking confirmation invariants (idempotency, hold ownership, expiry), cross-organiser event ownership
 - **Concurrency** (`tests/concurrency`) — 20-way seat hold race, partial-hold rejection, FIFO waitlist assignment, concurrent offer acceptance, offer expiry/advancement
 
 Tests run against a real PostgreSQL database (the same local instance as development) using Prisma, not mocks.
