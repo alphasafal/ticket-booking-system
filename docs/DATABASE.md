@@ -68,6 +68,21 @@ Two rules are enforced in the service layer (with transactions/locks) rather tha
 - **At most one active `WaitlistEntry` per `(eventId, userId, category)`** — a user can have many `COMPLETED`/`EXPIRED` entries over time, but only one `WAITING` or `OFFERED` at once. Enforced with a Postgres advisory lock (`pg_advisory_xact_lock`) keyed to `(eventId, userId, category)` around the check-then-insert in `joinWaitlist`.
 - **A seat is never booked twice at once** — enforced by the `EventSeat.status` state machine plus `SELECT ... FOR UPDATE` row locking in every mutating path (see [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md)).
 
+## Booking invariants
+
+These are the correctness rules the system is built around. Each links to where it's enforced.
+
+1. **One `EventSeat` belongs to exactly one `Event` + `Seat` combination** — `@@unique([eventId, seatId])` in the schema.
+2. **`BOOKED` seats cannot be held** — `holdSeats` (`lib/seat/hold-service.ts`) only transitions a locked row to `HELD` if its current status is `AVAILABLE` or an expired `HELD`; a `BOOKED` row never matches.
+3. **A valid `HELD` seat belongs to one active hold** — the hold's `holdToken` is a single cryptographically random value covering exactly the seats granted together in one transaction; no other transaction can attach a second token to the same row while it's locked.
+4. **Expired `HELD` seats cannot be booked** — `confirmBooking` (`lib/booking/booking-service.ts`) checks `holdExpiresAt > now()` inside the same transaction that locks the row, throwing `HOLD_EXPIRED` otherwise.
+5. **A booking can only contain seats from its event** — the hold and checkout queries filter `EventSeat` by `eventId` at every step; a hold token from event A can't be redeemed against event B.
+6. **A user can only confirm their own hold** — `confirmBooking` compares every locked row's `holdUserId` to the caller, throwing `HOLD_OWNER_MISMATCH` otherwise.
+7. **A cancelled booking cannot be cancelled twice** — `cancelBooking` (`lib/booking/cancellation-service.ts`) locks the `Booking` row and checks `status !== 'CANCELLED'` before proceeding, throwing `ALREADY_CANCELLED` otherwise.
+8. **A waitlist offer can only be accepted by the offered user** — `acceptWaitlistOffer` (`lib/waitlist/waitlist-service.ts`) compares the locked `WaitlistEntry.userId` to the caller, throwing `OFFER_OWNER_MISMATCH` otherwise.
+9. **An expired waitlist offer cannot be accepted** — the same function checks `offerExpiresAt > now()` with the row locked, throwing `OFFER_EXPIRED` otherwise.
+10. **One seat cannot be successfully booked twice (at the same time)** — the `EventSeat.status` state machine plus `SELECT ... FOR UPDATE` locking (invariant enforced the same way as #2–4; see [`SYSTEM_DESIGN.md`](SYSTEM_DESIGN.md) for the concurrency mechanics and the 20-way race test that proves it).
+
 ## Money and time
 
 All monetary fields are `Int` minor units (paise for INR). Timestamps are stored as `DateTime` (UTC) by Prisma/Postgres and formatted to the viewer's local time only at the UI boundary.
