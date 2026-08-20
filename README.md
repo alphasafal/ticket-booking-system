@@ -1,6 +1,27 @@
 # Ticket Booking System
 
-A production-grade ticket booking platform: venues, events, a live seat map, TTL-based seat holds with real row-level concurrency protection, atomic checkout, cancellation, and a FIFO category waitlist with time-limited offers — built to survive an evaluator actively trying to break it.
+A ticket booking platform for movies and concerts: venues and seat layouts, a live seat map, TTL-based seat holds with row-level concurrency protection, atomic checkout with QR tickets by email, cancellation, and FIFO per-category waitlists with time-limited offers.
+
+### 🔗 Live demo — **https://ticket-booking-system-alphasafals-projects.vercel.app**
+
+Sign in with any of these (password `password123` for all):
+
+| Role | Email |
+|---|---|
+| Customer | `customer@ticketbooking.dev` |
+| Organiser | `organiser@ticketbooking.dev` |
+| Admin | `admin@ticketbooking.dev` |
+| Customer on a waitlist | `waitlisted@ticketbooking.dev` |
+
+**Docs:** [System design](docs/SYSTEM_DESIGN.md) · [API reference](docs/API.md) · [Database schema](docs/DATABASE.md)
+
+### Quick tour
+
+1. Open the [concert event](https://ticket-booking-system-alphasafals-projects.vercel.app/events) as `customer@` — the seat map shows available, held, and booked seats from real database state.
+2. Select seats and hold them; open the same event in a second browser to see them locked to everyone else.
+3. Check out — you get a booking reference, a QR ticket, and a confirmation email.
+4. Row A (Premium) is sold out, and `waitlisted@` is already queued for that category. Cancel the Premium booking as `customer@` (My bookings → the 8-seat booking) — a released seat is offered to `waitlisted@` automatically, who sees it under **My bookings** with a countdown and can claim it in one click.
+5. As `organiser@`, view live booking and revenue totals on the dashboard.
 
 ## Features
 
