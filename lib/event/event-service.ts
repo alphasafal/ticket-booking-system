@@ -58,6 +58,9 @@ export function listPublishedEvents(filters: { type?: string; search?: string })
   return prisma.event.findMany({
     where: {
       status: "PUBLISHED",
+      // Customers browse to book; an event that has already started can't be
+      // booked, so it does not belong in this list.
+      startTime: { gte: new Date() },
       ...(filters.type ? { type: filters.type } : {}),
       ...(filters.search ? { title: { contains: filters.search, mode: "insensitive" } } : {}),
     },

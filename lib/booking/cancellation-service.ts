@@ -23,9 +23,13 @@ export async function cancelBooking(params: { bookingId: string; userId: string 
   const { eventId, offers } = await prisma.$transaction(
     async (tx) => {
       const rows = await tx.$queryRaw<
-        { id: string; userId: string; status: string; eventId: string }[]
+        { id: string; userId: string; status: string; eventId: string; startTime: Date }[]
       >(Prisma.sql`
-        SELECT id, "userId", status, "eventId" FROM "Booking" WHERE id = ${bookingId} FOR UPDATE
+        SELECT b.id, b."userId", b.status, b."eventId", e."startTime"
+        FROM "Booking" b
+        JOIN "Event" e ON e.id = b."eventId"
+        WHERE b.id = ${bookingId}
+        FOR UPDATE OF b
       `);
       const booking = rows[0];
       if (!booking) {
@@ -36,6 +40,15 @@ export async function cancelBooking(params: { bookingId: string; userId: string 
       }
       if (booking.status === "CANCELLED") {
         throw new ApiError("ALREADY_CANCELLED", "This booking has already been cancelled.");
+      }
+      // Releasing seats for an event that has already begun would be
+      // meaningless, and worse, would email waitlisted customers an offer for
+      // a show they can no longer attend.
+      if (booking.startTime <= new Date()) {
+        throw new ApiError(
+          "EVENT_ALREADY_STARTED",
+          "This event has already started, so the booking can no longer be cancelled.",
+        );
       }
 
       const seatRows = await tx.$queryRaw<CancelledSeat[]>(Prisma.sql`
