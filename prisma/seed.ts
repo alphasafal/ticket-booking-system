@@ -182,7 +182,11 @@ async function main() {
     priceByEventSeatId,
   });
 
-  // One seat actively HELD, to demonstrate the hold/countdown state.
+  // One seat left in the HELD state so the seat map demonstrates all three
+  // statuses on arrival. Given a long expiry deliberately: a real hold uses
+  // DEFAULT_HOLD_TTL_MINUTES and would lapse minutes after seeding, leaving
+  // nothing held to look at. This is an ordinary hold row through the normal
+  // model — only its TTL is stretched for demo purposes.
   const heldSeat = concertEventSeatByRowNumber.get("C1")!;
   await prisma.eventSeat.update({
     where: { id: heldSeat.id },
@@ -190,7 +194,7 @@ async function main() {
       status: "HELD",
       holdToken: "seed-demo-hold-token",
       holdUserId: waitlistedCustomer.id,
-      holdExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      holdExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
     },
   });
 
