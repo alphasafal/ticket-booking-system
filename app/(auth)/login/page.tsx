@@ -2,11 +2,20 @@
 
 import Link from "next/link";
 import { useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { cardClass, errorTextClass, inputClass, labelClass, primaryButtonClass } from "@/components/ui/styles";
+
+// Only same-origin relative paths are honoured, so a crafted ?next= can't be
+// used to bounce a signed-in user to an external site.
+function safeNextPath(next: string | null): string | null {
+  if (!next || !next.startsWith("/") || next.startsWith("//")) return null;
+  return next;
+}
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const nextPath = safeNextPath(searchParams.get("next"));
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -29,7 +38,7 @@ export default function LoginPage() {
       setError(data.error?.message ?? "Something went wrong.");
       return;
     }
-    router.push("/events");
+    router.push(nextPath ?? "/events");
     router.refresh();
   }
 

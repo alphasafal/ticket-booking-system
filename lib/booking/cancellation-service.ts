@@ -53,7 +53,12 @@ export async function cancelBooking(params: { bookingId: string; userId: string 
         data: { status: "CANCELLED", cancelledAt: new Date() },
       });
 
-      const offers: { category: SeatCategory; userId: string; offerExpiresAt: Date }[] = [];
+      const offers: {
+        waitlistEntryId: string;
+        category: SeatCategory;
+        userId: string;
+        offerExpiresAt: Date;
+      }[] = [];
       for (const seat of seatRows) {
         const offer = await offerToNextCandidateOrRelease(tx, {
           eventId: booking.eventId,
@@ -61,7 +66,7 @@ export async function cancelBooking(params: { bookingId: string; userId: string 
           eventSeatId: seat.eventSeatId,
         });
         if (offer) {
-          offers.push({ category: seat.category, userId: offer.userId, offerExpiresAt: offer.offerExpiresAt });
+          offers.push({ ...offer, category: seat.category });
         }
       }
 
@@ -71,6 +76,6 @@ export async function cancelBooking(params: { bookingId: string; userId: string 
   );
 
   for (const offer of offers) {
-    await notifyWaitlistOffer(eventId, offer.category, offer.userId, offer.offerExpiresAt);
+    await notifyWaitlistOffer({ ...offer, eventId });
   }
 }
