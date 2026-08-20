@@ -9,6 +9,10 @@ export interface SeatMapEntry {
   category: string;
   status: "AVAILABLE" | "HELD" | "BOOKED";
   heldByCurrentUser: boolean;
+  // Only populated when heldByCurrentUser is true — never expose another
+  // user's hold token. Lets the checkout page scope itself to exactly the
+  // seats from one hold, even if the same user has another hold elsewhere.
+  holdToken: string | null;
 }
 
 // Expired holds are flipped back to AVAILABLE here as routine housekeeping
@@ -45,13 +49,17 @@ export async function getEventSeatMap(eventId: string, currentUserId: string | n
     orderBy: [{ seat: { row: "asc" } }, { seat: { number: "asc" } }],
   });
 
-  return eventSeats.map((es) => ({
-    eventSeatId: es.id,
-    seatId: es.seatId,
-    row: es.seat.row,
-    number: es.seat.number,
-    category: es.seat.category,
-    status: es.status,
-    heldByCurrentUser: es.status === "HELD" && es.holdUserId === currentUserId,
-  }));
+  return eventSeats.map((es) => {
+    const heldByCurrentUser = es.status === "HELD" && es.holdUserId === currentUserId;
+    return {
+      eventSeatId: es.id,
+      seatId: es.seatId,
+      row: es.seat.row,
+      number: es.seat.number,
+      category: es.seat.category,
+      status: es.status,
+      heldByCurrentUser,
+      holdToken: heldByCurrentUser ? es.holdToken : null,
+    };
+  });
 }
