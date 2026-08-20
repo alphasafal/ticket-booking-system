@@ -129,6 +129,10 @@ Per-`(event, category)` FIFO queue. Cancellation hands a released seat to the ea
 
 QR codes encode the booking reference and are generated only after a booking commits successfully. Email is sent after the database transaction commits, never inside it — an email provider outage is logged but never rolls back or invalidates a successful booking.
 
+Delivery is deferred with `after()` from `next/server` rather than left as a floating promise: it keeps the confirmation response fast while guaranteeing the serverless invocation stays alive until the mail is actually sent. A bare un-awaited promise is silently dropped when the function freezes after responding.
+
+Mail is sent through Resend from a verified domain (`send.safalgupta.tech`, DKIM + SPF), so confirmations reach any recipient. With `RESEND_API_KEY` unset — the default for local development — emails are logged to the console instead, and the app warns loudly if the key is missing in production.
+
 ## Testing
 
 ```bash
@@ -179,8 +183,8 @@ docs/           API.md, DATABASE.md, SYSTEM_DESIGN.md
 
 ## Known limitations
 
-- **Email recipients are restricted on the deployed demo.** The Resend account backing it has no verified sending domain, so it can only deliver to the account owner's own address; mail to anyone else is rejected with a 403, logged, and — by design — leaves the booking itself intact. Verifying a domain at [resend.com/domains](https://resend.com/domains) and pointing `EMAIL_FROM` at it lifts the restriction with no code change.
 - No payment gateway — checkout is a simulated confirmation, as specified.
+- Email sends from a newly verified domain, so the first messages to a given provider may land in Promotions/Spam until it builds reputation. DKIM and SPF are configured.
 - Real-time seat updates use short polling (every 3s), not WebSockets, per the assignment's stated requirement.
 - Event cancellation (`status: CANCELLED`) does not cascade-cancel existing bookings — out of scope without a payment/refund system.
 - Rate limiting is a fixed window rather than a sliding one, so a burst can straddle a window boundary. It is deliberately backed by the existing Postgres rather than Redis, which the project's constraints exclude.
