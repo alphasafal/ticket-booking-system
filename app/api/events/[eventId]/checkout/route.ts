@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { requireAuth } from "@/lib/auth/rbac";
 import { confirmBooking, notifyBookingConfirmed } from "@/lib/booking/booking-service";
 import { checkoutSchema } from "@/lib/validation/booking";
@@ -21,7 +21,19 @@ export async function POST(
     });
 
     if (isNew) {
-      notifyBookingConfirmed(booking).catch((error) => console.error("Failed to notify booking:", error));
+      // Deliberately deferred rather than awaited, so a slow QR render or
+      // email API call never delays the customer's confirmation. `after`
+      // (not a bare floating promise) is what keeps the serverless
+      // invocation alive until this finishes — otherwise the function can be
+      // frozen the moment the response is returned and the email is
+      // silently dropped.
+      after(async () => {
+        try {
+          await notifyBookingConfirmed(booking);
+        } catch (error) {
+          console.error("Failed to notify booking:", error);
+        }
+      });
     }
 
     return jsonOk({ booking }, 201);

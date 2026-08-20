@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { requireAuth } from "@/lib/auth/rbac";
 import { acceptWaitlistOffer } from "@/lib/waitlist/waitlist-service";
 import { notifyBookingConfirmed } from "@/lib/booking/booking-service";
@@ -21,7 +21,15 @@ export async function POST(
     });
 
     if (isNew) {
-      notifyBookingConfirmed(booking).catch((error) => console.error("Failed to notify booking:", error));
+      // See the checkout route: `after` keeps the serverless invocation alive
+      // for this work, which a floating promise would not.
+      after(async () => {
+        try {
+          await notifyBookingConfirmed(booking);
+        } catch (error) {
+          console.error("Failed to notify booking:", error);
+        }
+      });
     }
 
     return jsonOk({ booking }, 201);
