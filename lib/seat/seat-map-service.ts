@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
+import { reconcileExpiredWaitlistOffers } from "@/lib/waitlist/waitlist-service";
 
 export interface SeatMapEntry {
   eventSeatId: string;
@@ -14,15 +15,21 @@ export interface SeatMapEntry {
 // so downstream reads see a clean state — but this is an optimization, not
 // the correctness mechanism. holdExpiresAt is re-checked lazily by every
 // path (hold, checkout) regardless of whether this has run recently.
+//
+// Only rows with holdUserId set are touched — those are self-service
+// customer holds. A HELD row with holdUserId = null is a waitlist offer,
+// and its expiry must go through expireAndAdvanceOffer (via
+// reconcileExpiredWaitlistOffers below) so the seat is handed to the next
+// waiting customer instead of just becoming generally available.
 export async function reconcileExpiredHolds(eventId?: string): Promise<number> {
   const now = new Date();
   const result = eventId
     ? await prisma.eventSeat.updateMany({
-        where: { eventId, status: "HELD", holdExpiresAt: { lte: now } },
+        where: { eventId, status: "HELD", holdExpiresAt: { lte: now }, holdUserId: { not: null } },
         data: { status: "AVAILABLE", holdToken: null, holdUserId: null, holdExpiresAt: null },
       })
     : await prisma.eventSeat.updateMany({
-        where: { status: "HELD", holdExpiresAt: { lte: now } },
+        where: { status: "HELD", holdExpiresAt: { lte: now }, holdUserId: { not: null } },
         data: { status: "AVAILABLE", holdToken: null, holdUserId: null, holdExpiresAt: null },
       });
   return result.count;
@@ -30,6 +37,7 @@ export async function reconcileExpiredHolds(eventId?: string): Promise<number> {
 
 export async function getEventSeatMap(eventId: string, currentUserId: string | null): Promise<SeatMapEntry[]> {
   await reconcileExpiredHolds(eventId);
+  await reconcileExpiredWaitlistOffers(eventId);
 
   const eventSeats = await prisma.eventSeat.findMany({
     where: { eventId },
