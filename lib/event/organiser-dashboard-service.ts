@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db/prisma";
+import { reconcileEventInventory } from "@/lib/seat/seat-map-service";
 
 export interface OrganiserEventSummary {
   id: string;
@@ -33,6 +34,11 @@ export async function getOrganiserDashboard(organiserId: string): Promise<Organi
     include: { venue: true, _count: { select: { eventSeats: true } } },
   });
   const eventIds = events.map((e) => e.id);
+
+  // Seat counts below read EventSeat.status directly, so elapsed TTLs must be
+  // applied first — otherwise a hold that expired minutes ago still counts as
+  // HELD and the "available seats" figure under-reports real availability.
+  await reconcileEventInventory(eventIds);
 
   const [bookingAggregates, seatStatusCounts] = await Promise.all([
     prisma.booking.groupBy({

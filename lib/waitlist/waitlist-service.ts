@@ -64,7 +64,7 @@ export async function joinWaitlist(params: {
 export async function offerToNextCandidateOrRelease(
   tx: Prisma.TransactionClient,
   params: { eventId: string; category: SeatCategory; eventSeatId: string },
-): Promise<{ userId: string; offerExpiresAt: Date } | null> {
+): Promise<{ waitlistEntryId: string; userId: string; offerExpiresAt: Date } | null> {
   const candidateRows = await tx.$queryRaw<{ id: string; userId: string }[]>(Prisma.sql`
     SELECT id, "userId" FROM "WaitlistEntry"
     WHERE "eventId" = ${params.eventId} AND category = ${params.category}::"SeatCategory" AND status = 'WAITING'
@@ -97,27 +97,30 @@ export async function offerToNextCandidateOrRelease(
     data: { status: "HELD", holdExpiresAt: offerExpiresAt, holdToken: null, holdUserId: null },
   });
 
-  return { userId: candidate.userId, offerExpiresAt };
+  return { waitlistEntryId: candidate.id, userId: candidate.userId, offerExpiresAt };
 }
 
-export async function notifyWaitlistOffer(
-  eventId: string,
-  category: SeatCategory,
-  userId: string,
-  offerExpiresAt: Date,
-): Promise<void> {
+export async function notifyWaitlistOffer(params: {
+  waitlistEntryId: string;
+  eventId: string;
+  category: SeatCategory;
+  userId: string;
+  offerExpiresAt: Date;
+}): Promise<void> {
   const [user, event] = await Promise.all([
-    prisma.user.findUnique({ where: { id: userId } }),
-    prisma.event.findUnique({ where: { id: eventId } }),
+    prisma.user.findUnique({ where: { id: params.userId } }),
+    prisma.event.findUnique({ where: { id: params.eventId } }),
   ]);
   if (!user || !event) return;
 
   await sendWaitlistOffer({
     to: user.email,
     eventTitle: event.title,
-    category,
-    offerExpiresAt,
-    acceptUrl: `${env.NEXT_PUBLIC_APP_URL}/bookings`,
+    category: params.category,
+    offerExpiresAt: params.offerExpiresAt,
+    // Deep link straight to the offer so the customer can complete the
+    // booking in one click, for as long as the offer is still live.
+    acceptUrl: `${env.NEXT_PUBLIC_APP_URL}/waitlist/offer/${params.waitlistEntryId}`,
   });
 }
 
@@ -179,14 +182,42 @@ export async function expireAndAdvanceOffer(waitlistEntryId: string): Promise<vo
   );
 
   if (result) {
+    // The expired entry and the newly offered one share an event+category
+    // queue, so the expired row is a safe source for those two fields.
     const entry = await prisma.waitlistEntry.findUnique({
       where: { id: waitlistEntryId },
       select: { eventId: true, category: true },
     });
     if (entry) {
-      await notifyWaitlistOffer(entry.eventId, entry.category, result.userId, result.offerExpiresAt);
+      await notifyWaitlistOffer({
+        waitlistEntryId: result.waitlistEntryId,
+        eventId: entry.eventId,
+        category: entry.category,
+        userId: result.userId,
+        offerExpiresAt: result.offerExpiresAt,
+      });
     }
   }
+}
+
+// Backs the time-limited offer link sent by email. Reconciles first so a
+// lapsed offer is shown as expired (and passed on) rather than as claimable.
+export async function getWaitlistOfferDetail(entryId: string) {
+  const entry = await prisma.waitlistEntry.findUnique({
+    where: { id: entryId },
+    select: { eventId: true },
+  });
+  if (!entry) return null;
+
+  await reconcileExpiredWaitlistOffers([entry.eventId]);
+
+  return prisma.waitlistEntry.findUnique({
+    where: { id: entryId },
+    include: {
+      event: { include: { venue: true, categoryPrices: true } },
+      offeredSeat: { include: { seat: true } },
+    },
+  });
 }
 
 export function getUserWaitlistEntries(userId: string) {
@@ -197,10 +228,13 @@ export function getUserWaitlistEntries(userId: string) {
   });
 }
 
-export async function reconcileExpiredWaitlistOffers(eventId?: string): Promise<void> {
-  const now = new Date();
+export async function reconcileExpiredWaitlistOffers(eventIds?: string[]): Promise<void> {
   const expired = await prisma.waitlistEntry.findMany({
-    where: { status: "OFFERED", offerExpiresAt: { lte: now }, ...(eventId ? { eventId } : {}) },
+    where: {
+      status: "OFFERED",
+      offerExpiresAt: { lte: new Date() },
+      ...(eventIds ? { eventId: { in: eventIds } } : {}),
+    },
     select: { id: true },
   });
   for (const entry of expired) {
