@@ -145,7 +145,16 @@ Tests run against a real PostgreSQL database (the same local instance as develop
 
 ## Deployment
 
-Not yet deployed. The app is built to deploy as-is to **Vercel** (frontend/API) with a managed Postgres provider (Neon, Supabase, or Railway) for the database — set the same environment variables as `.env.example` in the hosting provider's dashboard, run `prisma migrate deploy` against the production database, and optionally run the seed script once for demo data.
+**Live**: [https://ticket-booking-system-alphasafals-projects.vercel.app](https://ticket-booking-system-alphasafals-projects.vercel.app)
+
+Deployed on **Vercel** (frontend/API) with **Neon** Postgres for the database, seeded with the same demo data described above. To redeploy or replicate:
+
+1. Set `DATABASE_URL`, `AUTH_SECRET`, `EMAIL_FROM`, `NEXT_PUBLIC_APP_URL` (and optionally `RESEND_API_KEY`) as Production environment variables on Vercel — same names as `.env.example`.
+2. `npx prisma migrate deploy` against the production database.
+3. `npx tsx prisma/seed.ts` once, against the production database, for demo data.
+4. `vercel deploy --prod`.
+
+Note: `package.json` has a `postinstall: prisma generate` script — required so Vercel's cached-dependency builds regenerate the Prisma client instead of using a stale one.
 
 ## Project structure
 
