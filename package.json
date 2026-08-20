@@ -6,7 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "dotenv -e .env -- vitest run",
+    "test:watch": "dotenv -e .env -- vitest",
+    "db:migrate": "dotenv -e .env -- prisma migrate dev",
+    "db:seed": "dotenv -e .env -- tsx prisma/seed.ts",
+    "db:studio": "dotenv -e .env -- prisma studio"
   },
   "dependencies": {
     "@prisma/client": "6.12.0",
