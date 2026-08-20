@@ -16,8 +16,22 @@ async function createBooking(params: {
   eventSeatIds: string[];
   priceByEventSeatId: Map<string, number>;
 }) {
+  // Re-running the seed restores demo state rather than just skipping: a
+  // demo booking someone cancelled while exploring is put back to CONFIRMED
+  // with its seats re-marked BOOKED, so `npm run db:seed` reliably returns
+  // the app to a known-good starting point.
   const existing = await prisma.booking.findUnique({ where: { id: params.id } });
-  if (existing) return existing;
+  if (existing) {
+    await prisma.booking.update({
+      where: { id: params.id },
+      data: { status: "CONFIRMED", cancelledAt: null },
+    });
+    await prisma.eventSeat.updateMany({
+      where: { id: { in: params.eventSeatIds } },
+      data: { status: "BOOKED", holdToken: null, holdUserId: null, holdExpiresAt: null },
+    });
+    return existing;
+  }
 
   const total = params.eventSeatIds.reduce(
     (sum, id) => sum + (params.priceByEventSeatId.get(id) ?? 0),
@@ -201,7 +215,9 @@ async function main() {
   // Waitlist for the now sold-out PREMIUM category on the concert.
   await prisma.waitlistEntry.upsert({
     where: { id: "seed-waitlist-entry" },
-    update: {},
+    // Reset back to WAITING so a re-seed undoes any offer made during an
+    // earlier walkthrough of the cancellation flow.
+    update: { status: "WAITING", offeredSeatId: null, offerExpiresAt: null },
     create: {
       id: "seed-waitlist-entry",
       eventId: concert.id,
