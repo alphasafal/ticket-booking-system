@@ -190,6 +190,18 @@ model BookingSeat {
   @@index([eventSeatId])
 }
 
+// Fixed-window request counter for abuse-sensitive endpoints. Lives in
+// Postgres rather than process memory because the app runs on serverless
+// instances that share no state and are recycled constantly — an in-memory
+// counter there is effectively no limit at all.
+model RateLimit {
+  key         String   @id
+  count       Int
+  windowStart DateTime
+
+  @@index([windowStart])
+}
+
 model WaitlistEntry {
   id             String         @id @default(cuid())
   eventId        String
