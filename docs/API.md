@@ -24,7 +24,9 @@ All endpoints are Next.js Route Handlers under `/api`. Authentication is a signe
 | `OFFER_EXPIRED` | 409 |
 | `OFFER_OWNER_MISMATCH` | 403 |
 | `ALREADY_CANCELLED` | 409 |
+| `EVENT_ALREADY_STARTED` | 409 |
 | `CONFLICT` | 409 |
+| `RATE_LIMITED` | 429 |
 | `INTERNAL_ERROR` | 500 |
 
 **Money** — all amounts are integer minor units (paise), field-named `...MinorUnits`.
@@ -41,11 +43,11 @@ Request:
 { "name": "Alex", "email": "alex@example.com", "password": "at-least-8-chars", "role": "CUSTOMER" }
 ```
 Response `201`: `{ "user": { "id", "name", "email", "role" } }`
-Errors: `VALIDATION_ERROR` (email already registered, weak password).
+Errors: `VALIDATION_ERROR` (email already registered, weak password), `RATE_LIMITED` (more than 5 registrations per minute from one IP).
 
 ### `POST /api/auth/login`
 Auth: none. Request: `{ "email", "password" }`. Response `200`: `{ "user": {...} }`.
-Errors: `UNAUTHORIZED` (invalid credentials).
+Errors: `UNAUTHORIZED` (invalid credentials), `RATE_LIMITED` (more than 10 attempts per minute from one IP).
 
 ### `POST /api/auth/logout`
 Auth: any. Clears the session cookie. Response `200`: `{ "success": true }`.
@@ -117,7 +119,7 @@ Auth: the booking's owner. Response `200`: `{ "booking": {...} }`. Errors: `NOT_
 
 ### `POST /api/bookings/:bookingId/cancel`
 Auth: the booking's owner. Cancels the booking, releases its seats, and — in the same transaction — offers each released seat to the earliest waiting customer for its category (or leaves it `AVAILABLE` if no one is waiting).
-Response `200`: `{ "success": true }`. Errors: `NOT_FOUND`, `FORBIDDEN`, `ALREADY_CANCELLED`.
+Response `200`: `{ "success": true }`. Errors: `NOT_FOUND`, `FORBIDDEN`, `ALREADY_CANCELLED`, `EVENT_ALREADY_STARTED` (an event already under way can no longer be cancelled).
 
 ---
 
@@ -135,6 +137,8 @@ Response `201`: `{ "entry": {...} }`. Errors: `DUPLICATE_WAITLIST_ENTRY`.
 Auth: the user who was offered the seat. Accepts a live offer and confirms it into a booking.
 Request: `{ "idempotencyKey": "client-generated-uuid" }`
 Response `201`: `{ "booking": {...} }`. Errors: `NOT_FOUND`, `OFFER_OWNER_MISMATCH`, `OFFER_EXPIRED`.
+
+This is the endpoint behind the time-limited link emailed to a waitlisted customer. That link points at the page `/waitlist/offer/:entryId`, which shows the live countdown and calls this endpoint on accept. The page is a convenience — ownership and expiry are validated here, server-side, on every attempt.
 
 ---
 

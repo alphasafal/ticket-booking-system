@@ -48,6 +48,8 @@ A unique constraint on `(eventId, seatId)` guarantees there is never more than o
 
 **WaitlistEntry** — `id, eventId, userId, category, status (WAITING|OFFERED|COMPLETED|EXPIRED), offeredSeatId, offerExpiresAt, createdAt, updatedAt`. FIFO ordering is `createdAt ASC` over `WAITING` rows within an `(eventId, category)`.
 
+**RateLimit** — `key, count, windowStart`. A fixed-window request counter for abuse-sensitive endpoints (login, registration). It lives in Postgres rather than process memory because the app runs on serverless instances that share no state and are recycled constantly, where an in-memory counter enforces nothing. The increment-or-reset is a single atomic `INSERT ... ON CONFLICT DO UPDATE`, so simultaneous requests cannot both read a stale count and slip past the limit.
+
 ## Indexes
 
 | Table | Index | Purpose |
@@ -60,6 +62,7 @@ A unique constraint on `(eventId, seatId)` guarantees there is never more than o
 | `BookingSeat` | `(eventSeatId)` | Cancellation seat lookups |
 | `WaitlistEntry` | `(eventId, category, status, createdAt)` | FIFO candidate selection |
 | `WaitlistEntry` | `(offerExpiresAt)` | Offer expiry reconciliation |
+| `RateLimit` | `(windowStart)` | Sweeping stale counters |
 
 ## Invariants not expressed as schema constraints
 
