@@ -141,7 +141,11 @@ model EventSeat {
 
   event          Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
   seat           Seat            @relation(fields: [seatId], references: [id], onDelete: Cascade)
-  bookingSeat    BookingSeat?
+  // Plural: a seat can accumulate one BookingSeat per past booking across
+  // cancel/rebook cycles (e.g. cancelled, then re-booked via the waitlist).
+  // "Not booked twice at once" is enforced by the EventSeat status state
+  // machine and row locking, not by uniqueness here.
+  bookingSeats   BookingSeat[]
   waitlistOffers WaitlistEntry[] @relation("OfferedSeat")
 
   // One inventory row per seat per event — never duplicated.
@@ -176,13 +180,14 @@ model Booking {
 model BookingSeat {
   id              String @id @default(cuid())
   bookingId       String
-  eventSeatId     String @unique
+  eventSeatId     String
   priceMinorUnits Int
 
   booking   Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   eventSeat EventSeat @relation(fields: [eventSeatId], references: [id])
 
   @@index([bookingId])
+  @@index([eventSeatId])
 }
 
 model WaitlistEntry {
