@@ -2,6 +2,8 @@ import { Prisma, type SeatCategory } from "@prisma/client";
 import { prisma } from "@/lib/db/prisma";
 import { ApiError } from "@/lib/utils/api-error";
 import { generateBookingReference } from "@/lib/utils/booking-reference";
+import { generateBookingQrCode } from "@/lib/qr/qr-service";
+import { sendBookingConfirmation } from "@/lib/email/email-service";
 import { priceForCategory, sumPrices, type CategoryPriceMap } from "./pricing";
 
 interface HeldSeatRow {
@@ -34,15 +36,15 @@ export interface ConfirmedBooking {
   seats: ConfirmedBookingSeat[];
 }
 
-const bookingWithSeatsInclude = {
+export const bookingWithSeatsInclude = {
   seats: {
     include: { eventSeat: { include: { seat: true } } },
   },
 } satisfies Prisma.BookingInclude;
 
-type BookingWithSeats = Prisma.BookingGetPayload<{ include: typeof bookingWithSeatsInclude }>;
+export type BookingWithSeats = Prisma.BookingGetPayload<{ include: typeof bookingWithSeatsInclude }>;
 
-function mapBooking(booking: BookingWithSeats): ConfirmedBooking {
+export function mapBooking(booking: BookingWithSeats): ConfirmedBooking {
   return {
     id: booking.id,
     reference: booking.reference,
@@ -62,24 +64,74 @@ function mapBooking(booking: BookingWithSeats): ConfirmedBooking {
 }
 
 /**
- * Confirms a booking from an active hold. Atomic: either every held seat
- * transitions to BOOKED and the Booking/BookingSeat rows are created
- * together, or nothing changes.
- *
- * Idempotency: `idempotencyKey` is unique on Booking. A retried request with
- * the same key returns the original booking instead of creating a second
- * one — both on the fast pre-check and, to close the race between two
- * simultaneous retries, on a unique-constraint violation from the insert
- * itself.
+ * Creates the Booking + BookingSeat rows for a set of already-locked,
+ * already-verified-available EventSeat rows. Callers (checkout, waitlist
+ * offer acceptance) are responsible for locking and validating the seats
+ * within their own transaction before calling this — pricing and reference
+ * generation are the one shared source of truth for both flows.
  */
-export async function confirmBooking(params: {
-  eventId: string;
-  userId: string;
-  holdToken: string;
-  idempotencyKey: string;
-}): Promise<ConfirmedBooking> {
-  const { eventId, userId, holdToken, idempotencyKey } = params;
+export async function createBookingRecord(
+  tx: Prisma.TransactionClient,
+  params: {
+    eventId: string;
+    userId: string;
+    idempotencyKey: string;
+    seatRows: { eventSeatId: string; category: SeatCategory }[];
+  },
+): Promise<BookingWithSeats> {
+  const categoryPrices = await tx.eventCategoryPrice.findMany({ where: { eventId: params.eventId } });
+  const priceMap: CategoryPriceMap = Object.fromEntries(
+    categoryPrices.map((cp) => [cp.category, cp.priceMinorUnits]),
+  );
 
+  const seatPrices = params.seatRows.map((row) => ({
+    eventSeatId: row.eventSeatId,
+    priceMinorUnits: priceForCategory(priceMap, row.category),
+  }));
+  const totalAmountMinorUnits = sumPrices(seatPrices.map((sp) => sp.priceMinorUnits));
+
+  return tx.booking.create({
+    data: {
+      reference: generateBookingReference(),
+      eventId: params.eventId,
+      userId: params.userId,
+      totalAmountMinorUnits,
+      idempotencyKey: params.idempotencyKey,
+      seats: { create: seatPrices },
+    },
+    include: bookingWithSeatsInclude,
+  });
+}
+
+function isIdempotencyKeyConflict(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2002" &&
+    !!(error.meta?.target as string[] | undefined)?.includes("idempotencyKey")
+  );
+}
+
+export interface IdempotentBookingResult {
+  booking: ConfirmedBooking;
+  // False when this call returned a booking created by an earlier request
+  // with the same idempotencyKey. Callers use this to avoid re-sending the
+  // confirmation email on a retried request.
+  isNew: boolean;
+}
+
+/**
+ * Runs `createFn` (which must create exactly one Booking with the given
+ * idempotencyKey) and makes the whole operation idempotent: a retried
+ * request with the same key returns the original booking instead of
+ * creating a second one. Handles both the common case (fast pre-check) and
+ * the race between two simultaneous retries (unique-constraint violation on
+ * the insert itself).
+ */
+export async function withIdempotentBooking(
+  idempotencyKey: string,
+  userId: string,
+  createFn: () => Promise<BookingWithSeats>,
+): Promise<IdempotentBookingResult> {
   const existing = await prisma.booking.findUnique({
     where: { idempotencyKey },
     include: bookingWithSeatsInclude,
@@ -88,11 +140,43 @@ export async function confirmBooking(params: {
     if (existing.userId !== userId) {
       throw new ApiError("CONFLICT", "This request has already been processed.");
     }
-    return mapBooking(existing);
+    return { booking: mapBooking(existing), isNew: false };
   }
 
   try {
-    const booking = await prisma.$transaction(
+    const created = await createFn();
+    return { booking: mapBooking(created), isNew: true };
+  } catch (error) {
+    if (isIdempotencyKeyConflict(error)) {
+      const winner = await prisma.booking.findUniqueOrThrow({
+        where: { idempotencyKey },
+        include: bookingWithSeatsInclude,
+      });
+      if (winner.userId !== userId) {
+        throw new ApiError("CONFLICT", "This request has already been processed.");
+      }
+      return { booking: mapBooking(winner), isNew: false };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Confirms a booking from an active hold. Atomic: either every held seat
+ * transitions to BOOKED and the Booking/BookingSeat rows are created
+ * together, or nothing changes. See withIdempotentBooking for the
+ * duplicate-request handling.
+ */
+export async function confirmBooking(params: {
+  eventId: string;
+  userId: string;
+  holdToken: string;
+  idempotencyKey: string;
+}): Promise<IdempotentBookingResult> {
+  const { eventId, userId, holdToken, idempotencyKey } = params;
+
+  return withIdempotentBooking(idempotencyKey, userId, () =>
+    prisma.$transaction(
       async (tx) => {
         const rows = await tx.$queryRaw<HeldSeatRow[]>(Prisma.sql`
           SELECT es.id as "eventSeatId", es."seatId", es.status, es."holdUserId", es."holdExpiresAt",
@@ -119,34 +203,11 @@ export async function confirmBooking(params: {
           throw new ApiError("HOLD_EXPIRED", "This hold has expired. Please select seats again.");
         }
 
-        const categoryPrices = await tx.eventCategoryPrice.findMany({ where: { eventId } });
-        const priceMap: CategoryPriceMap = Object.fromEntries(
-          categoryPrices.map((cp) => [cp.category, cp.priceMinorUnits]),
-        );
-
-        const seatPrices = rows.map((row) => ({
-          row,
-          priceMinorUnits: priceForCategory(priceMap, row.category),
-        }));
-        const totalAmountMinorUnits = sumPrices(seatPrices.map((sp) => sp.priceMinorUnits));
-
-        const reference = generateBookingReference();
-
-        const created = await tx.booking.create({
-          data: {
-            reference,
-            eventId,
-            userId,
-            totalAmountMinorUnits,
-            idempotencyKey,
-            seats: {
-              create: seatPrices.map(({ row, priceMinorUnits }) => ({
-                eventSeatId: row.eventSeatId,
-                priceMinorUnits,
-              })),
-            },
-          },
-          include: bookingWithSeatsInclude,
+        const created = await createBookingRecord(tx, {
+          eventId,
+          userId,
+          idempotencyKey,
+          seatRows: rows,
         });
 
         await tx.eventSeat.updateMany({
@@ -157,24 +218,32 @@ export async function confirmBooking(params: {
         return created;
       },
       { timeout: 15_000, maxWait: 10_000 },
-    );
+    ),
+  );
+}
 
-    return mapBooking(booking);
-  } catch (error) {
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002" &&
-      (error.meta?.target as string[] | undefined)?.includes("idempotencyKey")
-    ) {
-      const winner = await prisma.booking.findUniqueOrThrow({
-        where: { idempotencyKey },
-        include: bookingWithSeatsInclude,
-      });
-      if (winner.userId !== userId) {
-        throw new ApiError("CONFLICT", "This request has already been processed.");
-      }
-      return mapBooking(winner);
-    }
-    throw error;
-  }
+/**
+ * Generates the QR code and sends the confirmation email for a booking.
+ * Always called after the booking transaction has committed — never inside
+ * it, so a slow or failing email provider can never hold a database lock or
+ * roll back an otherwise-successful booking.
+ */
+export async function notifyBookingConfirmed(booking: ConfirmedBooking): Promise<void> {
+  const [user, event] = await Promise.all([
+    prisma.user.findUnique({ where: { id: booking.userId } }),
+    prisma.event.findUnique({ where: { id: booking.eventId }, include: { venue: true } }),
+  ]);
+  if (!user || !event) return;
+
+  const qrDataUrl = await generateBookingQrCode(booking.reference);
+
+  await sendBookingConfirmation({
+    to: user.email,
+    reference: booking.reference,
+    eventTitle: event.title,
+    venueName: event.venue.name,
+    eventDate: event.eventDate,
+    seats: booking.seats.map((s) => ({ row: s.row, number: s.number })),
+    qrDataUrl,
+  });
 }
