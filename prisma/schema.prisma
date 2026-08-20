@@ -1,0 +1,210 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER
+  ORGANISER
+  ADMIN
+}
+
+enum SeatCategory {
+  PREMIUM
+  STANDARD
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  CANCELLED
+}
+
+// EventSeat is the per-event inventory row for a physical Seat. It exists
+// separately from Seat because the same physical seat is reused across many
+// events, but its availability (AVAILABLE / HELD / BOOKED) is specific to
+// one event. This is the row that seat holds and bookings lock against.
+enum EventSeatStatus {
+  AVAILABLE
+  HELD
+  BOOKED
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+enum WaitlistStatus {
+  WAITING
+  OFFERED
+  COMPLETED
+  EXPIRED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(CUSTOMER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  organisedEvents Event[]         @relation("OrganiserEvents")
+  bookings        Booking[]
+  waitlistEntries WaitlistEntry[]
+
+  @@index([role])
+}
+
+model Venue {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  seats  Seat[]
+  events Event[]
+}
+
+model Seat {
+  id       String       @id @default(cuid())
+  venueId  String
+  row      String
+  number   Int
+  category SeatCategory
+
+  venue      Venue       @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  eventSeats EventSeat[]
+
+  // A physical seat is unique within its venue by row + number.
+  @@unique([venueId, row, number])
+  @@index([venueId, category])
+}
+
+model Event {
+  id          String      @id @default(cuid())
+  organiserId String
+  venueId     String
+  title       String
+  description String?
+  type        String
+  eventDate   DateTime
+  startTime   DateTime
+  status      EventStatus @default(DRAFT)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  organiser User @relation("OrganiserEvents", fields: [organiserId], references: [id])
+  venue     Venue @relation(fields: [venueId], references: [id])
+
+  categoryPrices  EventCategoryPrice[]
+  eventSeats      EventSeat[]
+  bookings        Booking[]
+  waitlistEntries WaitlistEntry[]
+
+  @@index([organiserId])
+  @@index([venueId])
+  @@index([status, eventDate])
+}
+
+// Per-category ticket price for one event. Kept out of Seat/EventSeat so
+// pricing is a single event-level source of truth instead of being
+// duplicated onto every seat row.
+model EventCategoryPrice {
+  id              String       @id @default(cuid())
+  eventId         String
+  category        SeatCategory
+  priceMinorUnits Int
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, category])
+}
+
+model EventSeat {
+  id            String          @id @default(cuid())
+  eventId       String
+  seatId        String
+  status        EventSeatStatus @default(AVAILABLE)
+  holdToken     String?
+  holdUserId    String?
+  holdExpiresAt DateTime?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  event          Event           @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  seat           Seat            @relation(fields: [seatId], references: [id], onDelete: Cascade)
+  bookingSeat    BookingSeat?
+  waitlistOffers WaitlistEntry[] @relation("OfferedSeat")
+
+  // One inventory row per seat per event — never duplicated.
+  @@unique([eventId, seatId])
+  @@index([eventId, status])
+  @@index([holdExpiresAt])
+  @@index([holdToken])
+}
+
+model Booking {
+  id                    String        @id @default(cuid())
+  reference             String        @unique
+  eventId               String
+  userId                String
+  status                BookingStatus @default(CONFIRMED)
+  totalAmountMinorUnits Int
+  // Client-supplied key so a retried/duplicated checkout request cannot
+  // create a second booking for the same hold.
+  idempotencyKey        String?       @unique
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  cancelledAt           DateTime?
+
+  event Event         @relation(fields: [eventId], references: [id])
+  user  User          @relation(fields: [userId], references: [id])
+  seats BookingSeat[]
+
+  @@index([userId, createdAt])
+  @@index([eventId])
+}
+
+model BookingSeat {
+  id              String @id @default(cuid())
+  bookingId       String
+  eventSeatId     String @unique
+  priceMinorUnits Int
+
+  booking   Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  eventSeat EventSeat @relation(fields: [eventSeatId], references: [id])
+
+  @@index([bookingId])
+}
+
+model WaitlistEntry {
+  id             String         @id @default(cuid())
+  eventId        String
+  userId         String
+  category       SeatCategory
+  status         WaitlistStatus @default(WAITING)
+  offeredSeatId  String?
+  offerExpiresAt DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  event       Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user        User       @relation(fields: [userId], references: [id])
+  offeredSeat EventSeat? @relation("OfferedSeat", fields: [offeredSeatId], references: [id])
+
+  // FIFO queue ordering per event+category is (createdAt ASC) over WAITING rows.
+  // A partial-uniqueness invariant (one active WAITING/OFFERED entry per
+  // user/event/category) is enforced in the service layer, not the schema,
+  // since Postgres partial unique indexes aren't expressible via Prisma's
+  // declarative schema.
+  @@index([eventId, category, status, createdAt])
+  @@index([offerExpiresAt])
+}
