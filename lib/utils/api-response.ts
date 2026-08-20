@@ -28,6 +28,16 @@ export function jsonError(error: unknown): NextResponse {
     );
   }
 
+  // request.json() throws a plain SyntaxError on malformed JSON — that's a
+  // client mistake, not a server fault, so it gets a 422 like any other
+  // invalid input rather than a generic 500.
+  if (error instanceof SyntaxError) {
+    return NextResponse.json(
+      { error: { code: "VALIDATION_ERROR", message: "Request body must be valid JSON." } },
+      { status: 422 },
+    );
+  }
+
   console.error("Unhandled API error:", error);
   return NextResponse.json(
     { error: { code: "INTERNAL_ERROR", message: "Something went wrong." } },
