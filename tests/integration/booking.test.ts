@@ -27,13 +27,14 @@ describe("booking confirmation", () => {
       seatIds: fixture.seats.map((s) => s.id),
     });
 
-    const booking = await confirmBooking({
+    const { booking, isNew } = await confirmBooking({
       eventId: fixture.event.id,
       userId: user.id,
       holdToken: hold.holdToken,
       idempotencyKey: randomUUID(),
     });
 
+    expect(isNew).toBe(true);
     expect(booking.reference).toMatch(/^TB-[A-Z0-9]{8}$/);
     expect(booking.totalAmountMinorUnits).toBe(150000);
     expect(booking.seats).toHaveLength(2);
@@ -54,7 +55,9 @@ describe("booking confirmation", () => {
     const first = await confirmBooking({ eventId: fixture.event.id, userId: user.id, holdToken: hold.holdToken, idempotencyKey });
     const second = await confirmBooking({ eventId: fixture.event.id, userId: user.id, holdToken: hold.holdToken, idempotencyKey });
 
-    expect(second.id).toBe(first.id);
+    expect(first.isNew).toBe(true);
+    expect(second.isNew).toBe(false);
+    expect(second.booking.id).toBe(first.booking.id);
     const bookingCount = await prisma.booking.count({ where: { eventId: fixture.event.id } });
     expect(bookingCount).toBe(1);
   });
