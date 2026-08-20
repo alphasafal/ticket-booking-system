@@ -189,6 +189,14 @@ export async function expireAndAdvanceOffer(waitlistEntryId: string): Promise<vo
   }
 }
 
+export function getUserWaitlistEntries(userId: string) {
+  return prisma.waitlistEntry.findMany({
+    where: { userId, status: { in: ["WAITING", "OFFERED"] } },
+    orderBy: { createdAt: "desc" },
+    include: { event: { include: { venue: true } } },
+  });
+}
+
 export async function reconcileExpiredWaitlistOffers(eventId?: string): Promise<void> {
   const now = new Date();
   const expired = await prisma.waitlistEntry.findMany({
