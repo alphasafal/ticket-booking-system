@@ -49,48 +49,53 @@ export async function holdSeats(params: {
   }
   const uniqueSeatIds = [...new Set(seatIds)];
 
-  return prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<LockedEventSeatRow[]>(Prisma.sql`
-      SELECT "id", "seatId", "status", "holdExpiresAt"
-      FROM "EventSeat"
-      WHERE "eventId" = ${eventId} AND "seatId" IN (${Prisma.join(uniqueSeatIds)})
-      ORDER BY "seatId" ASC
-      FOR UPDATE
-    `);
+  return prisma.$transaction(
+    async (tx) => {
+      const rows = await tx.$queryRaw<LockedEventSeatRow[]>(Prisma.sql`
+        SELECT "id", "seatId", "status", "holdExpiresAt"
+        FROM "EventSeat"
+        WHERE "eventId" = ${eventId} AND "seatId" IN (${Prisma.join(uniqueSeatIds)})
+        ORDER BY "seatId" ASC
+        FOR UPDATE
+      `);
 
-    if (rows.length !== uniqueSeatIds.length) {
-      throw new ApiError("NOT_FOUND", "One or more selected seats do not exist for this event.");
-    }
+      if (rows.length !== uniqueSeatIds.length) {
+        throw new ApiError("NOT_FOUND", "One or more selected seats do not exist for this event.");
+      }
 
-    const now = new Date();
-    const anyUnavailable = rows.some((row) => {
-      const effectivelyAvailable =
-        row.status === "AVAILABLE" ||
-        (row.status === "HELD" && row.holdExpiresAt !== null && row.holdExpiresAt <= now);
-      return !effectivelyAvailable;
-    });
+      const now = new Date();
+      const anyUnavailable = rows.some((row) => {
+        const effectivelyAvailable =
+          row.status === "AVAILABLE" ||
+          (row.status === "HELD" && row.holdExpiresAt !== null && row.holdExpiresAt <= now);
+        return !effectivelyAvailable;
+      });
 
-    if (anyUnavailable) {
-      throw new ApiError(
-        "SEAT_UNAVAILABLE",
-        "One or more selected seats are no longer available.",
-      );
-    }
+      if (anyUnavailable) {
+        throw new ApiError(
+          "SEAT_UNAVAILABLE",
+          "One or more selected seats are no longer available.",
+        );
+      }
 
-    const holdToken = generateHoldToken();
-    const expiresAt = new Date(now.getTime() + DEFAULT_HOLD_TTL_MINUTES * 60_000);
-    const eventSeatIds = rows.map((row) => row.id);
+      const holdToken = generateHoldToken();
+      const expiresAt = new Date(now.getTime() + DEFAULT_HOLD_TTL_MINUTES * 60_000);
+      const eventSeatIds = rows.map((row) => row.id);
 
-    await tx.eventSeat.updateMany({
-      where: { id: { in: eventSeatIds } },
-      data: {
-        status: "HELD",
-        holdToken,
-        holdUserId: userId,
-        holdExpiresAt: expiresAt,
-      },
-    });
+      await tx.eventSeat.updateMany({
+        where: { id: { in: eventSeatIds } },
+        data: {
+          status: "HELD",
+          holdToken,
+          holdUserId: userId,
+          holdExpiresAt: expiresAt,
+        },
+      });
 
-    return { holdToken, expiresAt, eventSeatIds };
-  });
+      return { holdToken, expiresAt, eventSeatIds };
+    },
+    // Under heavy contention many requests queue on the same row lock(s);
+    // give them room to wait their turn instead of erroring out.
+    { timeout: 15_000, maxWait: 10_000 },
+  );
 }
